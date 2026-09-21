@@ -1,10 +1,17 @@
-// 页面交互：时区档案与换算台两块都从服务端拉取，任何一步失败都把说明显示在顶部并标到对应输入项上
+// 页面交互：时区档案、换算台与换算方案三块都从服务端拉取，任何一步失败都把说明显示在顶部并标到对应输入项上。
+// 换算台当前的选择与方案里存的设置各用各的状态：存方案只读取换算台当下的值，编辑、重算方案都不回写换算台。
 
 const state = {
   zones: [],
+  allZones: [],
   counts: { total: 0, dstCount: 0, noDstCount: 0 },
   editingId: '',
   lastConvert: null,
+  schemes: [],
+  editingSchemeId: '',
+  // 换算台当前勾选的地区编号；方案表单勾选的编号只在表单打开期间存在 schemeSelected 里
+  convertSelected: [],
+  schemeSelected: [],
 };
 
 const MONTHS = [
@@ -13,6 +20,8 @@ const MONTHS = [
 ];
 const WEEKS = [['1', '第一个'], ['2', '第二个'], ['3', '第三个'], ['4', '第四个'], ['last', '最后一个']];
 const WEEKDAYS = [['0', '周日'], ['1', '周一'], ['2', '周二'], ['3', '周三'], ['4', '周四'], ['5', '周五'], ['6', '周六']];
+const DATE_STYLE_LABEL = { iso: '2026-09-20', cn: '2026 年 9 月 20 日' };
+const TIME_STYLE_LABEL = { hour24: '24 小时制', hour12: '12 小时制' };
 
 const el = (id) => document.getElementById(id);
 
@@ -50,13 +59,15 @@ function clearNotice() {
   box.textContent = '';
 }
 
-function clearFieldMarks() {
-  document.querySelectorAll('.invalid').forEach((node) => node.classList.remove('invalid'));
+function clearFieldMarks(scope) {
+  const root = scope || document;
+  root.querySelectorAll('.invalid').forEach((node) => node.classList.remove('invalid'));
 }
 
-function markField(field) {
+function markField(field, scope) {
   if (!field) return;
-  const target = document.querySelector(`[data-field="${field}"]`);
+  const root = scope || document;
+  const target = root.querySelector(`[data-field="${field}"]`);
   if (!target) return;
   target.classList.add('invalid');
   const input = target.matches('input, select, textarea') ? target : target.querySelector('input, select, textarea');
@@ -120,6 +131,7 @@ function fillOptions() {
   ['zone-start-weekday', 'zone-end-weekday'].forEach((id) => { el(id).innerHTML = weekdayOptions; });
 }
 
+// 档案表格按筛选条件拉一份；换算台与方案的勾选清单、来源下拉始终用不带筛选的全量清单
 async function loadZones() {
   const params = new URLSearchParams();
   const dst = el('zone-filter-dst').value;
@@ -127,11 +139,21 @@ async function loadZones() {
   if (dst) params.set('dst', dst);
   if (keyword) params.set('keyword', keyword);
   const query = params.toString();
-  const payload = await request(`/api/zones${query ? `?${query}` : ''}`);
-  state.zones = payload.zones || [];
-  state.counts = { total: payload.total || 0, dstCount: payload.dstCount || 0, noDstCount: payload.noDstCount || 0 };
+  const [filtered, full] = await Promise.all([
+    request(`/api/zones${query ? `?${query}` : ''}`),
+    request('/api/zones'),
+  ]);
+  state.zones = filtered.zones || [];
+  state.counts = { total: filtered.total || 0, dstCount: filtered.dstCount || 0, noDstCount: filtered.noDstCount || 0 };
+  state.allZones = full.zones || [];
+  // 档案有删除时，把已经不存在的勾选 quietly 拿掉，页面其余选择保持不动
+  const liveIds = new Set(state.allZones.map((item) => item.id));
+  state.convertSelected = state.convertSelected.filter((id) => liveIds.has(id));
   renderZones();
   renderConvertZoneOptions();
+  renderConvertTargets();
+  renderSchemeZoneOptions();
+  renderSchemeTargets();
 }
 
 function renderZones() {
@@ -157,10 +179,23 @@ function renderZones() {
 function renderConvertZoneOptions() {
   const select = el('convert-zone');
   const current = select.value;
-  select.innerHTML = state.zones
+  select.innerHTML = state.allZones
     .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}　${escapeHtml(item.displayName)}</option>`)
     .join('');
-  if (state.zones.some((item) => item.id === current)) select.value = current;
+  if (state.allZones.some((item) => item.id === current)) select.value = current;
+}
+
+// 换算台的地区勾选清单：勾选状态存在 state.convertSelected 里，重绘只按编号回填
+function renderConvertTargets() {
+  const box = el('convert-targets');
+  const checked = new Set(state.convertSelected);
+  box.innerHTML = state.allZones.map((item) => `<label class="pick-item">
+      <input type="checkbox" data-convert-target="${escapeHtml(item.id)}"${checked.has(item.id) ? ' checked' : ''}>
+      <span class="mono">${escapeHtml(item.name)}</span>
+      <span>${escapeHtml(item.displayName)}</span>
+      <span class="pick-offset">${escapeHtml(item.offsetText)}</span>
+    </label>`).join('');
+  el('targets-count').textContent = `已勾选 ${state.convertSelected.length} / ${state.allZones.length} 个地区`;
 }
 
 function openZoneForm(zone) {
@@ -240,10 +275,19 @@ async function submitZone(event) {
     }
     closeZoneForm();
     await loadZones();
+    await loadSchemes();
   } catch (err) {
     notify(err.message, 'error');
     markField(err.field);
   }
+}
+
+// 换算台当前的写法偏好；方案重算时结果里带的是方案自己的偏好，渲染以结果为准
+function currentConvertPrefs() {
+  return {
+    dateStyle: el('convert-date-style').value,
+    timeStyle: el('convert-time-style').value,
+  };
 }
 
 async function runConvert() {
@@ -252,6 +296,8 @@ async function runConvert() {
     date: el('convert-date').value,
     time: el('convert-time').value,
     zoneId: el('convert-zone').value,
+    targetIds: state.convertSelected,
+    ...currentConvertPrefs(),
   };
   try {
     const result = await request('/api/convert', { method: 'POST', body: JSON.stringify(payload) });
@@ -263,14 +309,29 @@ async function runConvert() {
   }
 }
 
+function showConvertWarning(result) {
+  const box = el('convert-warn');
+  const missing = result.missingZones || [];
+  if (missing.length === 0) {
+    box.className = 'convert-warn hidden';
+    box.textContent = '';
+    return;
+  }
+  const names = missing.map((item) => item.name || item.displayName || item.zoneId).join('、');
+  box.textContent = `方案里有 ${missing.length} 个地区已经不在档案中（${names}），已按其余 ${result.zonesInScope} 个地区继续换算。`;
+  box.className = 'convert-warn';
+}
+
 function renderConvert(result) {
-  el('convert-meta').textContent = `来源 ${result.input.zoneName}（${result.input.zoneDisplayName}，${result.input.offsetText}）的 ${result.input.date} ${result.input.time}，换算时刻 ${formatTime(result.convertedAt)}；参与换算的档案 ${result.zonesInScope} 条，与来源不同天的有 ${result.crossDayCount} 条，最大时差 ${Math.floor(result.maxDiffMinutes / 60)} 小时 ${result.maxDiffMinutes % 60} 分`;
+  showConvertWarning(result);
+  const schemeLine = result.scheme ? `按方案「${result.scheme.name}」重算；` : '';
+  el('convert-meta').textContent = `${schemeLine}来源 ${result.input.zoneName}（${result.input.zoneDisplayName}，${result.input.offsetText}）的 ${result.input.date} ${result.input.time}，换算时刻 ${formatTime(result.convertedAt)}；参与换算的档案 ${result.zonesInScope} 条，与来源不同天的有 ${result.crossDayCount} 条，最大时差 ${Math.floor(result.maxDiffMinutes / 60)} 小时 ${result.maxDiffMinutes % 60} 分`;
   const body = el('convert-body');
   body.innerHTML = result.results.map((item) => `<tr class="${item.isSource ? 'source-row' : ''}">
       <td class="mono">${escapeHtml(item.name)}</td>
       <td>${escapeHtml(item.displayName)}</td>
-      <td class="mono">${escapeHtml(item.localDate)}</td>
-      <td class="mono">${escapeHtml(item.localTime)}</td>
+      <td class="mono">${escapeHtml(item.localDateText || item.localDate)}</td>
+      <td class="mono">${escapeHtml(item.localTimeText || item.localTime)}</td>
       <td>${escapeHtml(item.weekday)}</td>
       <td><span class="tag ${item.dayOffset === 0 ? 'off' : 'warn'}">${escapeHtml(item.dayOffsetText)}</span></td>
       <td class="mono">${escapeHtml(item.offsetText)}</td>
@@ -280,34 +341,244 @@ function renderConvert(result) {
   el('convert-empty').classList.toggle('hidden', result.results.length > 0);
 }
 
-// 列表上的操作用事件委托统一处理，列表重绘之后不需要重新绑定
+// ---------- 换算方案 ----------
+
+async function loadSchemes() {
+  const payload = await request('/api/schemes');
+  state.schemes = payload.schemes || [];
+  renderSchemes();
+}
+
+function renderSchemes() {
+  const counts = el('scheme-counts');
+  if (state.schemes.length === 0) {
+    counts.textContent = '还没有存过方案。把常用的一组地区、来源时区与日期、时刻写法存起来，下次点开就能直接重算';
+  } else {
+    const broken = state.schemes.filter((item) => item.sourceExists === false || item.missingCount > 0).length;
+    counts.textContent = `已存 ${state.schemes.length} 个方案${broken ? `，其中 ${broken} 个引用了已删除的地区或来源时区` : ''}；点「按方案重算」会用换算台上当前的日期与时刻套方案设置`;
+  }
+  const body = el('scheme-body');
+  body.innerHTML = state.schemes.map((item) => {
+    const source = item.sourceExists
+      ? `${escapeHtml(item.zoneName)}　${escapeHtml(item.zoneDisplayName)}`
+      : '<span class="missing-text">来源时区已删除</span>';
+    const targetPart = item.missingCount > 0
+      ? `${item.targets.length - item.missingCount} 个 <span class="tag warn">${item.missingCount} 个已删除</span>`
+      : `${item.targets.length} 个`;
+    return `<tr>
+      <td>${escapeHtml(item.name)}</td>
+      <td>${source}</td>
+      <td>${targetPart}</td>
+      <td>${escapeHtml(DATE_STYLE_LABEL[item.dateStyle] || item.dateStyle)}</td>
+      <td>${escapeHtml(TIME_STYLE_LABEL[item.timeStyle] || item.timeStyle)}</td>
+      <td class="mono">${escapeHtml(formatTime(item.createdAt))}</td>
+      <td class="actions">
+        <button type="button" class="link" data-scheme-run="${escapeHtml(item.id)}">按方案重算</button>
+        <button type="button" class="link" data-scheme-edit="${escapeHtml(item.id)}">编辑</button>
+        <button type="button" class="link danger" data-scheme-delete="${escapeHtml(item.id)}">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSchemeZoneOptions() {
+  const select = el('scheme-zone');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = state.allZones
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}　${escapeHtml(item.displayName)}</option>`)
+    .join('');
+  if (state.allZones.some((item) => item.id === current)) select.value = current;
+}
+
+// 方案表单的地区勾选：现存档案正常勾选；编辑旧方案时已删除的引用单列在下面且不可勾选
+function renderSchemeTargets(missingEntries) {
+  const box = el('scheme-targets');
+  if (!box) return;
+  const checked = new Set(state.schemeSelected);
+  const live = state.allZones.map((item) => `<label class="pick-item">
+      <input type="checkbox" data-scheme-target="${escapeHtml(item.id)}"${checked.has(item.id) ? ' checked' : ''}>
+      <span class="mono">${escapeHtml(item.name)}</span>
+      <span>${escapeHtml(item.displayName)}</span>
+      <span class="pick-offset">${escapeHtml(item.offsetText)}</span>
+    </label>`).join('');
+  const gone = (missingEntries || [])
+    .filter((item) => !state.allZones.some((zone) => zone.id === item.zoneId))
+    .map((item) => `<label class="pick-item gone">
+      <input type="checkbox" disabled>
+      <span class="mono">${escapeHtml(item.name || item.zoneId)}</span>
+      <span>${escapeHtml(item.displayName || '')}</span>
+      <span class="missing-text">已删除，不再参与换算</span>
+    </label>`)
+    .join('');
+  box.innerHTML = `${live}${gone ? `<div class="gone-head">方案里引用但已被删除的地区：</div>${gone}` : ''}`;
+}
+
+// scheme 给了就按方案自身的设置填表（与换算台无关）；否则从换算台当前选择预填，仅这一次复制
+function openSchemeForm(scheme) {
+  clearNotice();
+  clearFieldMarks(el('scheme-form'));
+  renderSchemeZoneOptions();
+  if (scheme) {
+    state.editingSchemeId = scheme.id;
+    el('scheme-form-title').textContent = `编辑方案：${scheme.name}`;
+    el('scheme-name').value = scheme.name;
+    el('scheme-zone').value = scheme.zoneId;
+    el('scheme-date-style').value = scheme.dateStyle;
+    el('scheme-time-style').value = scheme.timeStyle;
+    state.schemeSelected = scheme.targets.filter((item) => item.exists).map((item) => item.zoneId);
+    renderSchemeTargets(scheme.targets.filter((item) => !item.exists));
+    if (!scheme.sourceExists) {
+      notify('这个方案的来源时区已被删除，请在下面重新选一个再保存，否则不能重算', 'error');
+    }
+  } else {
+    state.editingSchemeId = '';
+    el('scheme-form-title').textContent = '新建方案';
+    el('scheme-name').value = '';
+    el('scheme-zone').value = el('convert-zone').value;
+    el('scheme-date-style').value = el('convert-date-style').value;
+    el('scheme-time-style').value = el('convert-time-style').value;
+    state.schemeSelected = state.convertSelected.slice();
+    renderSchemeTargets([]);
+  }
+  el('scheme-form').classList.remove('hidden');
+  el('scheme-name').focus();
+}
+
+function closeSchemeForm() {
+  state.editingSchemeId = '';
+  state.schemeSelected = [];
+  el('scheme-form').classList.add('hidden');
+  clearFieldMarks(el('scheme-form'));
+}
+
+async function submitScheme(event) {
+  event.preventDefault();
+  clearNotice();
+  clearFieldMarks(el('scheme-form'));
+  const payload = {
+    name: el('scheme-name').value,
+    zoneId: el('scheme-zone').value,
+    targets: state.schemeSelected,
+    dateStyle: el('scheme-date-style').value,
+    timeStyle: el('scheme-time-style').value,
+  };
+  const editing = state.editingSchemeId;
+  try {
+    if (editing) {
+      await request(`/api/schemes/${encodeURIComponent(editing)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      notify('换算方案已保存', 'ok');
+    } else {
+      await request('/api/schemes', { method: 'POST', body: JSON.stringify(payload) });
+      notify('换算方案已新增', 'ok');
+    }
+    closeSchemeForm();
+    await loadSchemes();
+  } catch (err) {
+    notify(err.message, 'error');
+    markField(err.field, el('scheme-form'));
+  }
+}
+
+// 按方案重算：日期与时刻取换算台当前的值，地区、来源时区与写法偏好全部用方案里的；
+// 不动换算台上的任何选择，下次点「换算一遍」仍是页面自己的设置
+async function runScheme(id) {
+  clearNotice();
+  const payload = {
+    date: el('convert-date').value,
+    time: el('convert-time').value,
+  };
+  try {
+    const result = await request(`/api/schemes/${encodeURIComponent(id)}/convert`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    state.lastConvert = result;
+    renderConvert(result);
+    notify(`已按方案「${result.scheme.name}」重算`, 'ok');
+    el('convert-body').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) {
+    notify(err.message, 'error');
+  }
+}
+
+// 勾选变化与列表上的操作用事件委托统一处理，列表重绘之后不需要重新绑定
 document.addEventListener('click', async (event) => {
   const node = event.target.closest('button');
   if (!node) return;
 
   if (node.dataset.zoneEdit) {
     clearNotice();
-    const found = state.zones.find((item) => item.id === node.dataset.zoneEdit);
+    const found = state.allZones.find((item) => item.id === node.dataset.zoneEdit);
     if (found) openZoneForm(found);
     return;
   }
 
   if (node.dataset.zoneDelete) {
     clearNotice();
-    const found = state.zones.find((item) => item.id === node.dataset.zoneDelete);
-    if (!window.confirm(`确定删除 ${found ? found.name : ''} 这条档案吗？`)) return;
+    const found = state.allZones.find((item) => item.id === node.dataset.zoneDelete);
+    if (!window.confirm(`确定删除 ${found ? found.name : ''} 这条档案吗？引用它的方案重算时会标出缺失并继续。`)) return;
     try {
       await request(`/api/zones/${encodeURIComponent(node.dataset.zoneDelete)}`, { method: 'DELETE' });
       if (state.editingId === node.dataset.zoneDelete) closeZoneForm();
       notify('时区档案已删除', 'ok');
       await loadZones();
+      await loadSchemes();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+    return;
+  }
+
+  if (node.dataset.schemeRun) {
+    await runScheme(node.dataset.schemeRun);
+    return;
+  }
+
+  if (node.dataset.schemeEdit) {
+    const found = state.schemes.find((item) => item.id === node.dataset.schemeEdit);
+    if (found) openSchemeForm(found);
+    return;
+  }
+
+  if (node.dataset.schemeDelete) {
+    const found = state.schemes.find((item) => item.id === node.dataset.schemeDelete);
+    if (!window.confirm(`确定删除方案「${found ? found.name : ''}」吗？这不会影响换算台上当前的选择。`)) return;
+    try {
+      await request(`/api/schemes/${encodeURIComponent(node.dataset.schemeDelete)}`, { method: 'DELETE' });
+      if (state.editingSchemeId === node.dataset.schemeDelete) closeSchemeForm();
+      notify('换算方案已删除', 'ok');
+      await loadSchemes();
     } catch (err) {
       notify(err.message, 'error');
     }
   }
 });
 
+// 勾选框都是重绘的，change 事件同样走委托
+document.addEventListener('change', (event) => {
+  const convertTarget = event.target.dataset && event.target.dataset.convertTarget;
+  if (convertTarget) {
+    if (event.target.checked) {
+      if (!state.convertSelected.includes(convertTarget)) state.convertSelected.push(convertTarget);
+    } else {
+      state.convertSelected = state.convertSelected.filter((id) => id !== convertTarget);
+    }
+    el('targets-count').textContent = `已勾选 ${state.convertSelected.length} / ${state.allZones.length} 个地区`;
+    return;
+  }
+  const schemeTarget = event.target.dataset && event.target.dataset.schemeTarget;
+  if (schemeTarget) {
+    if (event.target.checked) {
+      if (!state.schemeSelected.includes(schemeTarget)) state.schemeSelected.push(schemeTarget);
+    } else {
+      state.schemeSelected = state.schemeSelected.filter((id) => id !== schemeTarget);
+    }
+  }
+});
+
 el('zone-form').addEventListener('submit', submitZone);
+el('scheme-form').addEventListener('submit', submitScheme);
 el('zone-new').addEventListener('click', () => {
   clearNotice();
   openZoneForm(null);
@@ -330,15 +601,47 @@ el('zone-filter-dst').addEventListener('change', () => {
   loadZones().catch((err) => notify(err.message, 'error'));
 });
 el('convert-run').addEventListener('click', runConvert);
+el('targets-all').addEventListener('click', () => {
+  state.convertSelected = state.allZones.map((item) => item.id);
+  renderConvertTargets();
+});
+el('targets-none').addEventListener('click', () => {
+  state.convertSelected = [];
+  renderConvertTargets();
+});
+el('scheme-targets-all').addEventListener('click', () => {
+  state.schemeSelected = state.allZones.map((item) => item.id);
+  renderSchemeTargets([]);
+});
+el('scheme-targets-none').addEventListener('click', () => {
+  state.schemeSelected = [];
+  renderSchemeTargets([]);
+});
+el('scheme-save-current').addEventListener('click', () => openSchemeForm(null));
+el('scheme-new').addEventListener('click', () => openSchemeForm(null));
+el('scheme-cancel').addEventListener('click', closeSchemeForm);
+el('scheme-refresh').addEventListener('click', () => {
+  clearNotice();
+  loadSchemes().catch((err) => notify(err.message, 'error'));
+});
 el('operator').addEventListener('change', () => {
   window.localStorage.setItem(OPERATOR_KEY, currentOperator());
 });
 
-// 页面打开时先把档案拉一遍，换算台的来源时区下拉按这份清单填
+// 页面打开时先把档案与方案各拉一遍；换算台地区默认全选，来源时区下拉按全量清单填
 fillOptions();
 restoreOperator();
 loadHealth();
 const now = new Date();
 el('convert-date').value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 el('convert-time').value = '09:30';
-loadZones().catch((err) => notify(err.message, 'error'));
+(async function init() {
+  try {
+    await loadZones();
+    state.convertSelected = state.allZones.map((item) => item.id);
+    renderConvertTargets();
+    await loadSchemes();
+  } catch (err) {
+    notify(err.message, 'error');
+  }
+}());

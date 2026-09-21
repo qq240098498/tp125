@@ -61,6 +61,56 @@ app.post('/api/convert', (req, res) => {
   }
 });
 
+// 换算方案：存下一组常用的地区选择与日期、时刻写法偏好
+app.get('/api/schemes', (_req, res) => {
+  try {
+    res.json(api.listSchemes());
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.post('/api/schemes', (req, res) => {
+  try {
+    res.status(201).json(api.createScheme(req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.get('/api/schemes/:id', (req, res) => {
+  try {
+    res.json(api.getScheme(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.patch('/api/schemes/:id', (req, res) => {
+  try {
+    res.json(api.updateScheme(req.params.id, req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.delete('/api/schemes/:id', (req, res) => {
+  try {
+    res.json(api.deleteScheme(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// 按方案重算：用页面上当前的日期与时刻，套方案里存下的地区选择与写法偏好
+app.post('/api/schemes/:id/convert', (req, res) => {
+  try {
+    res.json(api.runScheme(req.params.id, req.body || {}));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // 未匹配到的接口路径统一返回说明，避免前端拿到一串页面内容
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: { code: 'API_NOT_FOUND', message: '接口不存在', field: '' } });

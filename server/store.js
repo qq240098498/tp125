@@ -14,6 +14,12 @@ const MAX_YEAR = 2100;
 const MAX_NAME_LENGTH = 40;
 const MAX_DISPLAY_NAME_LENGTH = 40;
 const MAX_NOTE_LENGTH = 200;
+const MAX_SCHEME_NAME_LENGTH = 40;
+const DATE_STYLES = ['iso', 'cn'];
+const TIME_STYLES = ['hour24', 'hour12'];
+
+// 换算方案允许的写法偏好取值，方案落盘与接口校验都以此为准
+const SCHEME_PREF_DEFAULTS = { dateStyle: 'iso', timeStyle: 'hour24' };
 
 // 时区档案的初始数据。十条档案里有带半小时与三刻偏移的、有南半球跨年实行夏令时的、
 // 有已经停止实行夏令时但保留生效年份区间的，也有完全不实行夏令时的
@@ -134,7 +140,40 @@ function normalizeZone(item, fallbackIndex) {
   };
 }
 
-// 整份数据保证结构一致，缺名称、缺显示名的档案一律丢掉，名称重复的只留第一条
+// 方案里勾选的地区连同名称、显示名一起快照存下：地区档案后来被删掉时，
+// 重算仍能指出少的是哪几条。写法偏好缺省或不认识时回到默认写法
+function normalizeScheme(item, fallbackIndex) {
+  const source = item && typeof item === 'object' ? item : {};
+  const createdAt = typeof source.createdAt === 'string' && source.createdAt ? source.createdAt : new Date().toISOString();
+  const rawTargets = Array.isArray(source.targets) ? source.targets : [];
+  const targets = [];
+  rawTargets.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const zoneId = typeof entry.zoneId === 'string' ? entry.zoneId.trim() : '';
+    if (!zoneId || targets.some((item) => item.zoneId === zoneId)) return;
+    targets.push({
+      zoneId,
+      name: typeof entry.name === 'string' ? entry.name.trim() : '',
+      displayName: typeof entry.displayName === 'string' ? entry.displayName.trim() : '',
+    });
+  });
+  const dateStyle = DATE_STYLES.includes(source.dateStyle) ? source.dateStyle : SCHEME_PREF_DEFAULTS.dateStyle;
+  const timeStyle = TIME_STYLES.includes(source.timeStyle) ? source.timeStyle : SCHEME_PREF_DEFAULTS.timeStyle;
+  return {
+    id: typeof source.id === 'string' && source.id ? source.id : `scheme-restored-${fallbackIndex + 1}`,
+    name: typeof source.name === 'string' ? source.name.trim() : '',
+    zoneId: typeof source.zoneId === 'string' ? source.zoneId.trim() : '',
+    targets,
+    dateStyle,
+    timeStyle,
+    createdAt,
+    updatedAt: typeof source.updatedAt === 'string' && source.updatedAt ? source.updatedAt : createdAt,
+  };
+}
+
+// 整份数据保证结构一致，缺名称、缺显示名的档案一律丢掉，名称重复的只留第一条；
+// 方案没有名称也丢掉，编号或名称重复时只留第一条。方案引用的地区编号这里不做对照，
+// 地区后来被删掉是使用方案时才要处理的情形
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const rawZones = Array.isArray(source.zones) ? source.zones : seedZones();
@@ -152,7 +191,21 @@ function normalize(raw) {
     zones.push(zone);
   });
 
-  return { zones };
+  const rawSchemes = Array.isArray(source.schemes) ? source.schemes : [];
+  const seenSchemeIds = new Set();
+  const seenSchemeNames = new Set();
+  const schemes = [];
+  rawSchemes.forEach((item, index) => {
+    const scheme = normalizeScheme(item, index);
+    if (!scheme.id || !scheme.name) return;
+    const lower = scheme.name.toLowerCase();
+    if (seenSchemeIds.has(scheme.id) || seenSchemeNames.has(lower)) return;
+    seenSchemeIds.add(scheme.id);
+    seenSchemeNames.add(lower);
+    schemes.push(scheme);
+  });
+
+  return { zones, schemes };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写
@@ -161,7 +214,7 @@ function load() {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     return normalize(JSON.parse(raw));
   } catch (err) {
-    const data = { zones: seedZones() };
+    const data = normalize({ zones: seedZones() });
     save(data);
     return data;
   }
@@ -181,6 +234,7 @@ module.exports = {
   seedZones,
   normalize,
   normalizeZone,
+  normalizeScheme,
   normalizeRulePart,
   WEEKDAY_NAMES,
   MONTH_NAMES,
@@ -191,5 +245,9 @@ module.exports = {
   MAX_NAME_LENGTH,
   MAX_DISPLAY_NAME_LENGTH,
   MAX_NOTE_LENGTH,
+  MAX_SCHEME_NAME_LENGTH,
+  DATE_STYLES,
+  TIME_STYLES,
+  SCHEME_PREF_DEFAULTS,
   DATA_FILE,
 };

@@ -109,7 +109,34 @@
           <button type="button" id="convert-run">换算一遍</button>
         </div>
       </div>
-      <p class="convert-meta" id="convert-meta">还没有换算过，填好日期、时刻与来源时区点右侧按钮</p>
+      <p class="convert-meta" id="convert-meta">还没有换算过，填好日期、时刻与来源时区，勾好要参与的地区，点右侧按钮</p>
+      <div class="convert-options">
+        <div class="target-pick" data-field="targets">
+          <div class="target-pick-head">
+            <span>参与换算的地区</span>
+            <button type="button" id="targets-all" class="ghost">全选</button>
+            <button type="button" id="targets-none" class="ghost">清空</button>
+            <span class="picked-count" id="targets-count"></span>
+          </div>
+          <div class="target-list" id="convert-targets"></div>
+        </div>
+        <div class="pref-pick">
+          <label class="inline">日期写法
+            <select id="convert-date-style">
+              <option value="iso">2026-09-20</option>
+              <option value="cn">2026 年 9 月 20 日</option>
+            </select>
+          </label>
+          <label class="inline">时刻写法
+            <select id="convert-time-style">
+              <option value="hour24">24 小时制（09:30）</option>
+              <option value="hour12">12 小时制（上午 9:30）</option>
+            </select>
+          </label>
+          <button type="button" id="scheme-save-current">把当前选择存为方案</button>
+        </div>
+      </div>
+      <p class="convert-warn hidden" id="convert-warn"></p>
       <div class="table-wrap">
         <table class="grid">
           <thead>
@@ -129,6 +156,65 @@
         </table>
       </div>
       <p class="empty-tip hidden" id="convert-empty">还没有换算结果</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>换算方案</h2>
+        <div class="filters">
+          <button type="button" id="scheme-refresh" class="ghost">刷新</button>
+          <button type="button" id="scheme-new">新建方案</button>
+        </div>
+      </div>
+      <p class="counts" id="scheme-counts">还没有存过方案。把常用的一组地区、来源时区与日期、时刻写法存起来，下次点开就能直接重算</p>
+      <div class="table-wrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>方案名</th>
+              <th>来源时区</th>
+              <th>地区（条）</th>
+              <th>日期写法</th>
+              <th>时刻写法</th>
+              <th>存入时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="scheme-body"></tbody>
+        </table>
+      </div>
+
+      <form class="entry-form hidden" id="scheme-form" autocomplete="off">
+        <h3 id="scheme-form-title">新建方案</h3>
+        <div class="form-row">
+          <label data-field="name">方案名<input id="scheme-name" placeholder="例如 跨洋例会" maxlength="40"></label>
+          <label data-field="zoneId">来源时区<select id="scheme-zone"></select></label>
+          <label data-field="dateStyle">日期写法
+            <select id="scheme-date-style">
+              <option value="iso">2026-09-20</option>
+              <option value="cn">2026 年 9 月 20 日</option>
+            </select>
+          </label>
+          <label data-field="timeStyle">时刻写法
+            <select id="scheme-time-style">
+              <option value="hour24">24 小时制</option>
+              <option value="hour12">12 小时制</option>
+            </select>
+          </label>
+        </div>
+        <div data-field="targets">
+          <div class="target-pick-head">
+            <span>参与换算的地区</span>
+            <button type="button" id="scheme-targets-all" class="ghost">全选</button>
+            <button type="button" id="scheme-targets-none" class="ghost">清空</button>
+          </div>
+          <div class="target-list" id="scheme-targets"></div>
+        </div>
+        <div class="form-actions">
+          <button type="submit">保存方案</button>
+          <button type="button" id="scheme-cancel" class="ghost">取消</button>
+        </div>
+      </form>
     </section>
   </main>
 
