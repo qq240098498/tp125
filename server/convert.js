@@ -55,24 +55,15 @@ function dayOffsetText(dayOffset) {
   return `前 ${Math.abs(dayOffset)} 天`;
 }
 
-// 换算：先把输入时刻按来源时区的偏移折算成基准时刻，再逐个时区加上各自的偏移
-function convert(options) {
-  const input = options && typeof options === 'object' ? options : {};
-  const date = validateDate(input.date);
-  const time = validateTime(input.time);
-  const zoneId = pickText(input.zoneId);
-  if (!zoneId) throw new ApiError(400, 'ZONE_REQUIRED', '请选择来源时区', 'zoneId');
-
-  const data = load();
-  const source = data.zones.find((item) => item.id === zoneId);
-  if (!source) throw new ApiError(404, 'ZONE_NOT_FOUND', '选中的时区没有登记过', 'zoneId');
-
+// 换算核心：把来源时区的一个时刻先折算成基准时刻，再逐个时区加上各自的偏移。
+// 页面换算与方案重算都走这里，换算是哪一批地区由调用方决定
+function computeConversion(date, time, source, zones) {
   const baseMs = Date.UTC(date.year, date.month - 1, date.day, time.hour, time.minute);
   const utcMs = baseMs - source.offsetMinutes * 60000;
   const baseDay = Math.floor(baseMs / DAY_MS);
   const utcDate = new Date(utcMs);
 
-  const results = data.zones.map((zone) => {
+  const results = zones.map((zone) => {
     const localMs = utcMs + zone.offsetMinutes * 60000;
     const local = new Date(localMs);
     const dayOffset = Math.floor(localMs / DAY_MS) - baseDay;
@@ -101,6 +92,46 @@ function convert(options) {
   });
 
   return {
+    standard: {
+      date: `${utcDate.getUTCFullYear()}-${pad(utcDate.getUTCMonth() + 1)}-${pad(utcDate.getUTCDate())}`,
+      time: `${pad(utcDate.getUTCHours())}:${pad(utcDate.getUTCMinutes())}`,
+    },
+    crossDayCount: results.filter((item) => item.dayOffset !== 0).length,
+    maxDiffMinutes: results.reduce((acc, item) => Math.max(acc, Math.abs(item.diffMinutes)), 0),
+    results,
+  };
+}
+
+// 页面换算：可以给一组地区编号限定范围，不给就换算到所有已登记的时区
+function convert(options) {
+  const input = options && typeof options === 'object' ? options : {};
+  const date = validateDate(input.date);
+  const time = validateTime(input.time);
+  const zoneId = pickText(input.zoneId);
+  if (!zoneId) throw new ApiError(400, 'ZONE_REQUIRED', '请选择来源时区', 'zoneId');
+
+  const data = load();
+  const source = data.zones.find((item) => item.id === zoneId);
+  if (!source) throw new ApiError(404, 'ZONE_NOT_FOUND', '选中的时区没有登记过', 'zoneId');
+
+  let targets = data.zones;
+  if (input.zoneIds !== undefined && input.zoneIds !== null) {
+    if (!Array.isArray(input.zoneIds)) {
+      throw new ApiError(400, 'ZONE_SELECTION_INVALID', '地区选择要写成一组时区编号', 'zoneIds');
+    }
+    const wanted = new Set(input.zoneIds.filter((id) => typeof id === 'string' && id));
+    if (!wanted.size) {
+      throw new ApiError(400, 'ZONE_SELECTION_REQUIRED', '请至少勾选一个要换算的地区', 'zoneIds');
+    }
+    targets = data.zones.filter((zone) => wanted.has(zone.id));
+    if (!targets.length) {
+      throw new ApiError(400, 'ZONE_SELECTION_STALE', '勾选的地区都已不存在，请刷新列表后重新勾选', 'zoneIds');
+    }
+  }
+
+  const computed = computeConversion(date, time, source, targets);
+
+  return {
     input: {
       date: date.text,
       time: time.text,
@@ -110,16 +141,13 @@ function convert(options) {
       offsetText: offsetText(source.offsetMinutes),
       usesDst: source.usesDst,
     },
-    standard: {
-      date: `${utcDate.getUTCFullYear()}-${pad(utcDate.getUTCMonth() + 1)}-${pad(utcDate.getUTCDate())}`,
-      time: `${pad(utcDate.getUTCHours())}:${pad(utcDate.getUTCMinutes())}`,
-    },
-    zonesInScope: data.zones.length,
-    crossDayCount: results.filter((item) => item.dayOffset !== 0).length,
-    maxDiffMinutes: results.reduce((acc, item) => Math.max(acc, Math.abs(item.diffMinutes)), 0),
-    results,
+    standard: computed.standard,
+    zonesInScope: targets.length,
+    crossDayCount: computed.crossDayCount,
+    maxDiffMinutes: computed.maxDiffMinutes,
+    results: computed.results,
     convertedAt: new Date().toISOString(),
   };
 }
 
-module.exports = { convert, validateDate, validateTime, diffText, dayOffsetText };
+module.exports = { convert, computeConversion, validateDate, validateTime, diffText, dayOffsetText };

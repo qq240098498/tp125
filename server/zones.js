@@ -235,8 +235,12 @@ function deleteZone(id) {
   const index = data.zones.findIndex((item) => item.id === id);
   if (index === -1) throw new ApiError(404, 'ZONE_NOT_FOUND', '这条时区档案不存在或已被删除', '');
   const [removed] = data.zones.splice(index, 1);
+  // 引用到这条档案的方案不动，重算时会点名缺失；这里先把受影响的方案名带回去提醒
+  const referencedBy = data.presets
+    .filter((preset) => preset.sourceZoneId === id || preset.zones.some((ref) => ref.zoneId === id))
+    .map((preset) => preset.name);
   save(data);
-  return { id: removed.id, name: removed.name, displayName: removed.displayName };
+  return { id: removed.id, name: removed.name, displayName: removed.displayName, referencedBy };
 }
 
 module.exports = {

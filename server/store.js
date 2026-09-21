@@ -14,6 +14,10 @@ const MAX_YEAR = 2100;
 const MAX_NAME_LENGTH = 40;
 const MAX_DISPLAY_NAME_LENGTH = 40;
 const MAX_NOTE_LENGTH = 200;
+const MAX_PRESET_NAME_LENGTH = 40;
+// 方案里日期与时刻写法的可选项，落库前只认这几个值
+const DATE_FORMATS = ['iso', 'cn', 'dmy', 'mdy'];
+const TIME_FORMATS = ['h24', 'h12'];
 
 // 时区档案的初始数据。十条档案里有带半小时与三刻偏移的、有南半球跨年实行夏令时的、
 // 有已经停止实行夏令时但保留生效年份区间的，也有完全不实行夏令时的
@@ -134,6 +138,47 @@ function normalizeZone(item, fallbackIndex) {
   };
 }
 
+// 方案里引用的一条地区：只记编号与当时的名称快照，地区日后被删也能报出是谁
+function normalizePresetZoneRef(item) {
+  if (!item || typeof item !== 'object') return null;
+  const zoneId = typeof item.zoneId === 'string' ? item.zoneId : '';
+  if (!zoneId) return null;
+  return {
+    zoneId,
+    name: typeof item.name === 'string' ? item.name : '',
+    displayName: typeof item.displayName === 'string' ? item.displayName : '',
+  };
+}
+
+// 单个换算方案整理成固定结构。引用的地区编号不在档案里也保留，
+// 重算时靠这些引用指出哪几条已经缺失，不能在这里悄悄丢掉
+function normalizePreset(item, fallbackIndex) {
+  const source = item && typeof item === 'object' ? item : {};
+  const createdAt = typeof source.createdAt === 'string' && source.createdAt ? source.createdAt : new Date().toISOString();
+
+  const seenZoneIds = new Set();
+  const zones = [];
+  (Array.isArray(source.zones) ? source.zones : []).forEach((ref) => {
+    const zoneRef = normalizePresetZoneRef(ref);
+    if (!zoneRef || seenZoneIds.has(zoneRef.zoneId)) return;
+    seenZoneIds.add(zoneRef.zoneId);
+    zones.push(zoneRef);
+  });
+
+  return {
+    id: typeof source.id === 'string' && source.id ? source.id : `preset-restored-${fallbackIndex + 1}`,
+    name: typeof source.name === 'string' ? source.name.trim() : '',
+    zones,
+    sourceZoneId: typeof source.sourceZoneId === 'string' ? source.sourceZoneId : '',
+    sourceName: typeof source.sourceName === 'string' ? source.sourceName : '',
+    sourceDisplayName: typeof source.sourceDisplayName === 'string' ? source.sourceDisplayName : '',
+    dateFormat: DATE_FORMATS.includes(source.dateFormat) ? source.dateFormat : 'iso',
+    timeFormat: TIME_FORMATS.includes(source.timeFormat) ? source.timeFormat : 'h24',
+    createdAt,
+    updatedAt: typeof source.updatedAt === 'string' && source.updatedAt ? source.updatedAt : createdAt,
+  };
+}
+
 // 整份数据保证结构一致，缺名称、缺显示名的档案一律丢掉，名称重复的只留第一条
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -152,7 +197,22 @@ function normalize(raw) {
     zones.push(zone);
   });
 
-  return { zones };
+  // 方案：名字为空、没有引用任何地区、没记来源时区的都立不住，丢掉；
+  // 名字重复的只留先存的那一条
+  const seenPresetIds = new Set();
+  const seenPresetNames = new Set();
+  const presets = [];
+  (Array.isArray(source.presets) ? source.presets : []).forEach((item, index) => {
+    const preset = normalizePreset(item, index);
+    if (!preset.id || !preset.name || !preset.sourceZoneId || !preset.zones.length) return;
+    const lower = preset.name.toLowerCase();
+    if (seenPresetIds.has(preset.id) || seenPresetNames.has(lower)) return;
+    seenPresetIds.add(preset.id);
+    seenPresetNames.add(lower);
+    presets.push(preset);
+  });
+
+  return { zones, presets };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写
@@ -161,7 +221,7 @@ function load() {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     return normalize(JSON.parse(raw));
   } catch (err) {
-    const data = { zones: seedZones() };
+    const data = { zones: seedZones(), presets: [] };
     save(data);
     return data;
   }
@@ -182,6 +242,7 @@ module.exports = {
   normalize,
   normalizeZone,
   normalizeRulePart,
+  normalizePreset,
   WEEKDAY_NAMES,
   MONTH_NAMES,
   MIN_OFFSET,
@@ -191,5 +252,8 @@ module.exports = {
   MAX_NAME_LENGTH,
   MAX_DISPLAY_NAME_LENGTH,
   MAX_NOTE_LENGTH,
+  MAX_PRESET_NAME_LENGTH,
+  DATE_FORMATS,
+  TIME_FORMATS,
   DATA_FILE,
 };

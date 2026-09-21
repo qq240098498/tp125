@@ -61,6 +61,52 @@ app.post('/api/convert', (req, res) => {
   }
 });
 
+// 换算方案：存下一组换算设置，之后按方案重算
+app.get('/api/presets', (_req, res) => {
+  res.json(api.listPresets());
+});
+
+app.post('/api/presets', (req, res) => {
+  try {
+    res.status(201).json(api.createPreset(req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.get('/api/presets/:id', (req, res) => {
+  try {
+    res.json(api.getPreset(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.patch('/api/presets/:id', (req, res) => {
+  try {
+    res.json(api.updatePreset(req.params.id, req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.delete('/api/presets/:id', (req, res) => {
+  try {
+    res.json(api.deletePreset(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// 按方案重算：日期与时刻用页面当前填的，地区、来源时区与写法偏好按方案存的
+app.post('/api/presets/:id/run', (req, res) => {
+  try {
+    res.json(api.runPreset(req.params.id, req.body || {}));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // 未匹配到的接口路径统一返回说明，避免前端拿到一串页面内容
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: { code: 'API_NOT_FOUND', message: '接口不存在', field: '' } });

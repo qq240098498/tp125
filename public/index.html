@@ -101,15 +101,65 @@
 
     <section class="panel">
       <div class="panel-head">
+        <h2>换算方案</h2>
+        <div class="filters">
+          <button type="button" id="preset-refresh" class="ghost">刷新</button>
+        </div>
+      </div>
+      <p class="counts" id="preset-counts"></p>
+      <div class="preset-list" id="preset-list"></div>
+      <p class="empty-tip hidden" id="preset-empty">还没有保存过换算方案。在换算台勾选好地区、来源时区与日期、时刻的写法后，点「存为方案」即可把当前设置存下来。</p>
+
+      <form class="entry-form hidden" id="preset-form" autocomplete="off">
+        <h3 id="preset-form-title">编辑方案</h3>
+        <div class="form-row">
+          <label data-field="presetName">方案名<input id="preset-name" placeholder="例如 亚太早盘" maxlength="40"></label>
+          <label data-field="presetSource">来源时区<select id="preset-source"></select></label>
+          <label data-field="presetDateFormat">日期写法<select id="preset-date-format"></select></label>
+          <label data-field="presetTimeFormat">时刻写法<select id="preset-time-format"></select></label>
+        </div>
+        <div class="form-row">
+          <span class="rule-label" data-field="presetZones">方案地区</span>
+          <div class="region-list" id="preset-form-regions"></div>
+        </div>
+        <p class="stale-hint hidden" id="preset-stale-hint"></p>
+        <div class="form-actions">
+          <button type="submit">保存方案</button>
+          <button type="button" id="preset-cancel" class="ghost">取消</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
         <h2>换算台</h2>
         <div class="filters">
           <label class="inline" data-field="date">日期<input id="convert-date" type="date"></label>
           <label class="inline" data-field="time">时刻<input id="convert-time" placeholder="例如 09:30" maxlength="5"></label>
           <label class="inline" data-field="zoneId">来源时区<select id="convert-zone"></select></label>
+          <label class="inline">日期写法<select id="convert-date-format"></select></label>
+          <label class="inline">时刻写法<select id="convert-time-format"></select></label>
           <button type="button" id="convert-run">换算一遍</button>
+          <button type="button" id="preset-save-open" class="ghost">存为方案</button>
         </div>
       </div>
+      <div class="preset-save-bar hidden" id="preset-save-bar">
+        <label data-field="presetName">方案名<input id="preset-save-name" placeholder="例如 亚太早盘" maxlength="40"></label>
+        <span class="preset-save-hint" id="preset-save-hint"></span>
+        <button type="button" id="preset-save-confirm">保存方案</button>
+        <button type="button" id="preset-save-cancel" class="ghost">取消</button>
+      </div>
+      <div class="region-row">
+        <div class="region-head">
+          <span data-field="presetZones">换算地区</span>
+          <button type="button" class="link" id="region-all">全选</button>
+          <button type="button" class="link" id="region-none">清空</button>
+          <span class="region-count" id="region-count"></span>
+        </div>
+        <div class="region-list" id="region-list"></div>
+      </div>
       <p class="convert-meta" id="convert-meta">还没有换算过，填好日期、时刻与来源时区点右侧按钮</p>
+      <p class="preset-missing hidden" id="convert-missing"></p>
       <div class="table-wrap">
         <table class="grid">
           <thead>
